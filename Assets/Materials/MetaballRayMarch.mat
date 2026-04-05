@@ -187,7 +187,7 @@ Material:
     - _EnableFogOnTransparent: 1
     - _EnableGeometricSpecularAA: 0
     - _EnergyConservingSpecularColor: 1
-    - _FresnelPower: 3.27
+    - _FresnelPower: 1.05
     - _HeightAmplitude: 0.02
     - _HeightCenter: 0.5
     - _HeightMapParametrization: 0
@@ -202,8 +202,8 @@ Material:
     - _IridescenceMask: 1
     - _IridescenceThickness: 1
     - _LinkDetailsWithBase: 1
-    - _MarchDistance: 10.3
-    - _MarchSteps: 66
+    - _MarchDistance: 4.9
+    - _MarchSteps: 97
     - _MaterialID: 1
     - _Metallic: 0
     - _MetallicRemapMax: 1
@@ -224,8 +224,8 @@ Material:
     - _ReceivesSSR: 1
     - _ReceivesSSRTransparent: 0
     - _RefractionModel: 0
-    - _RefractionStrength: 0
-    - _Smoothness: 0.925
+    - _RefractionStrength: 0.0626
+    - _Smoothness: 0.937
     - _SmoothnessRemapMax: 1
     - _SmoothnessRemapMin: 0
     - _SpecularAAScreenSpaceVariance: 0.1
@@ -246,7 +246,7 @@ Material:
     - _TexWorldScale: 1
     - _TexWorldScaleEmissive: 1
     - _Thickness: 1
-    - _Threshold: 0.22
+    - _Threshold: 0.161
     - _TransmissionEnable: 1
     - _TransmissionMask: 1
     - _TransparentBackfaceEnable: 0

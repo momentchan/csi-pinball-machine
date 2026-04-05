@@ -119,86 +119,78 @@ Shader "Hidden/MetaballRayMarch"
     {
         FragOutput o;
 
-        // --- Reconstruct world-space ray ----------------------------------------
-        // GetFullScreenTriangleTexCoord on DX gives V=0 at top (DX texture convention).
-        // ComputeWorldSpacePosition expects V=0 at bottom (OpenGL/NDC convention).
-        // Pre-flip Y so the two conventions match; without this the metaball appears
-        // reflected vertically in the scene (objects below camera appear above horizon).
-        float2 rayUV = float2(i.uv.x, 1.0 - i.uv.y);
+        // 1. Use pure UV to fix vertical offset
+        float2 rayUV = i.uv;
 
-        float3 rayOrigin = GetCurrentViewPosition();
-        float3 posOnFar  = ComputeWorldSpacePosition(rayUV, UNITY_RAW_FAR_CLIP_VALUE, UNITY_MATRIX_I_VP);
-        float3 rayDir    = normalize(posOnFar - rayOrigin);
+        // 2. Force ray into Absolute World Space (AWS) to match C# absolute positions
+        float3 rayOriginWS = _WorldSpaceCameraPos;
+        
+        // ComputeWorldSpacePosition returns Camera-Relative, so we convert it to Absolute
+        float3 posOnFarWS = GetAbsolutePositionWS(ComputeWorldSpacePosition(rayUV, UNITY_RAW_FAR_CLIP_VALUE, UNITY_MATRIX_I_VP));
+        float3 rayDirWS   = normalize(posOnFarWS - rayOriginWS);
 
-        // --- Debug mode 1: show ray directions as RGB colours -------------------
-        // Green should be bright at top of screen, dark at bottom (rays point up/down).
-        // Red brighter on right, blue on both sides (Z forward).
         if (_DebugMode >= 0.5)
         {
-            o.color = float4(rayDir * 0.5 + 0.5, 1.0);
+            o.color = float4(rayDirWS * 0.5 + 0.5, 1.0);
             o.depth = UNITY_RAW_FAR_CLIP_VALUE;
             return o;
         }
 
-        // --- Cap march at whatever opaque geometry is already in the depth buffer -
+        // 3. Cap march distance in Absolute World Space
         float  sceneRawDepth = LoadCameraDepth(i.positionCS.xy);
-        float3 scenePosWS    = ComputeWorldSpacePosition(rayUV, sceneRawDepth, UNITY_MATRIX_I_VP);
-        float  maxDist       = min(_MarchDistance, length(scenePosWS - rayOrigin));
+        float3 scenePosWS    = GetAbsolutePositionWS(ComputeWorldSpacePosition(rayUV, sceneRawDepth, UNITY_MATRIX_I_VP));
+        float  maxDist       = min(_MarchDistance, length(scenePosWS - rayOriginWS));
 
-        // --- Ray march ----------------------------------------------------------
+        // Ray march
         int   marchSteps = max(1, (int)_MarchSteps);
         float stepSize   = maxDist / (float)marchSteps;
-        float t          = 0.01; // start just past the camera near plane
+        float t          = 0.01;
         bool  hit        = false;
         float3 hitPos;
 
         UNITY_LOOP
         for (int s = 0; s < marchSteps; s++)
         {
-            float3 pos   = rayOrigin + rayDir * t;
+            // Marching in Absolute World Space
+            float3 pos   = rayOriginWS + rayDirWS * t;
             float  field = MetaballField(pos);
 
             if (field >= _Threshold)
             {
-                // Binary-search refinement for a crisper surface (2 extra steps)
                 float tLo = t - stepSize, tHi = t;
                 for (int r = 0; r < 4; r++)
                 {
                     float tMid = (tLo + tHi) * 0.5;
-                    if (MetaballField(rayOrigin + rayDir * tMid) >= _Threshold)
+                    if (MetaballField(rayOriginWS + rayDirWS * tMid) >= _Threshold)
                         tHi = tMid;
                     else
                         tLo = tMid;
                 }
-                hitPos = rayOrigin + rayDir * tHi;
+                hitPos = rayOriginWS + rayDirWS * tHi;
                 hit    = true;
                 break;
             }
 
-            // Adaptive step — march faster when far from threshold
-            float proximity = saturate(field / _Threshold);  // 0 = far, 1 = at surface
+            float proximity = saturate(field / _Threshold);
             t += stepSize * lerp(2.0, 0.5, proximity);
             if (t > maxDist) break;
         }
 
         if (!hit) discard;
 
-        // --- Shading ------------------------------------------------------------
+        // Shading
         float3 N    = MetaballNormal(hitPos);
-        float3 V    = -rayDir;
+        float3 V    = -rayDirWS;
         float  NdotV = saturate(dot(N, V));
         float  NdotL = saturate(dot(N, _MetaballLightDir.xyz));
         float3 H    = normalize(V + _MetaballLightDir.xyz);
 
-        // Fresnel (Schlick)
+        // Fresnel & Refraction
         float fresnel = pow(1.0 - NdotV, _FresnelPower);
-
-        // Refraction
         float2 refractUV  = i.uv + N.xy * _RefractionStrength * (1.0 - fresnel);
         refractUV         = clamp(refractUV, 0.001, 0.999);
-        float3 pyramidCol = SAMPLE_TEXTURE2D_X_LOD(_ColorPyramidTexture,
-                                s_linear_clamp_sampler,
-                                refractUV * _RTHandleScale.xy, 0).rgb;
+        
+        float3 pyramidCol = SAMPLE_TEXTURE2D_X_LOD(_ColorPyramidTexture, s_linear_clamp_sampler, refractUV * _RTHandleScale.xy, 0).rgb;
         float3 refractCol = lerp(_BallColor.rgb * 0.4, pyramidCol * _BallColor.rgb, 0.7);
 
         // Reflection via SH
@@ -208,26 +200,24 @@ Shader "Hidden/MetaballRayMarch"
             dot(unity_SHAb, float4(N, 1)));
         irradiance = max(0, irradiance);
 
-        // GGX specular
+        // Specular
         float  roughness = 1.0 - _Smoothness;
         float  ggx       = GGXSpecular(N, H, max(roughness, 0.04));
         float  specScale = PI * roughness * roughness;
         float3 specular  = (_MetaballLightColor.xyz * NdotL) * ggx * specScale * _Smoothness;
 
-        // Fresnel blend
+        // Blend
         float3 baseColor = lerp(refractCol, irradiance * _BallColor.rgb * 0.5, fresnel * 0.6);
         float3 color     = baseColor + specular + _MetaballAmbient.xyz * _BallColor.rgb * 0.1;
-
+        
         // Alpha
         float alpha = lerp(0.12, 0.88, fresnel) + saturate(ggx * specScale) * 0.4;
-        alpha = saturate(alpha);
+        o.color = float4(color * saturate(alpha), saturate(alpha));
 
-        // Premultiplied alpha (matches HDRP blend mode below)
-        o.color = float4(color * alpha, alpha);
-
-        // Write depth — this is what makes the metaball sit correctly in the
-        // scene, receiving and casting depth-based effects (SSAO, SSR, etc.)
-        float4 hitCS = mul(UNITY_MATRIX_VP, float4(hitPos, 1.0));
+        // 4. Write depth
+        // Convert Absolute hitPos back to Camera Relative before multiplying by UNITY_MATRIX_VP
+        float3 hitPosRWS = GetCameraRelativePositionWS(hitPos);
+        float4 hitCS = mul(UNITY_MATRIX_VP, float4(hitPosRWS, 1.0));
         o.depth = hitCS.z / hitCS.w;
 
         return o;
